@@ -1075,6 +1075,31 @@ def check_workflows(report: Report) -> None:
             "CODE_SIGNING_ALLOWED=NO" in text,
         )
 
+        # A single .ipa is ~280-300 MB. GitHub's default artifact retention is 90
+        # days and artifacts count against the account's Actions storage — 500 MB on
+        # a free private repo. Leaving the default would exhaust the quota after two
+        # builds, and the failure mode is an upload error that looks unrelated.
+        report.check(
+            "build.yml 显式设置产物保留期（默认 90 天会撑爆私有仓库配额）",
+            "artifact_retention_days" in text,
+            "产物体积约 300 MB，必须用可配置的短保留期",
+        )
+
+        # Parse the declared default rather than trusting a comment about it.
+        retention_match = re.search(
+            r"artifact_retention_days:\s*\n\s*description:[^\n]*\n\s*required:\s*\w+\s*\n\s*default:\s*\"(\d+)\"",
+            text,
+        )
+        if retention_match:
+            default_days = int(retention_match.group(1))
+            report.check(
+                f"保留期默认值 {default_days} 天在合理范围内（1–30）",
+                1 <= default_days <= 30,
+                "私有仓库 500 MB 配额装不下几份 300 MB 产物",
+            )
+        else:
+            report.check("能解析出保留期默认值", False, "artifact_retention_days 缺少 default")
+
     if jre_yml.is_file():
         text = jre_yml.read_text(encoding="utf-8")
 

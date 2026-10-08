@@ -7,9 +7,23 @@ name: Build unsigned IPA
 # deliberately **unsigned** — signing and installation are handled separately by a
 # certificate-based sideloading tool on the device.
 #
-# The Java runtime is NOT stored in this repository. It is ~400 MB of prebuilt
-# GPL-3.0 binaries from upstream projects, fetched fresh by
-# Scripts/bootstrap-runtime.sh on every run. Caching keeps repeat builds quick.
+# ── Repository visibility matters more than usual here ────────────────────────
+#
+# The runtime is NOT stored in this repository: ~266 MB of prebuilt GPL-3.0 binaries
+# from upstream, fetched by Scripts/bootstrap-runtime.sh on every run.
+#
+# But the *artifact* is large — roughly 280–300 MB, because it contains two complete
+# OpenJDKs and the graphics translation layers. Artifacts count against the account's
+# Actions storage:
+#
+#   public repo   unlimited, free
+#   private repo  500 MB on the free plan
+#
+# So on a private repo a single retained build can consume most of the quota, and
+# the second one may be rejected. `artifact_retention_days` defaults to 14 for that
+# reason — enough time to download and sideload, not enough to accumulate.
+# A public repository avoids the problem entirely, and GPL-3.0 requires the source
+# to be available anyway.
 
 on:
   workflow_dispatch:
@@ -18,6 +32,10 @@ on:
         description: "PojavLauncher runtime version to build against"
         required: false
         default: "2.2"
+      artifact_retention_days:
+        description: "How long to keep the .ipa (private repos have a 500 MB quota)"
+        required: false
+        default: "14"
       skip_verify:
         description: "Skip Scripts/verify.py (faster, not recommended)"
         type: boolean
@@ -201,12 +219,26 @@ jobs:
           ls -lh CraftLauncher-unsigned.ipa
           echo "sha256: $(shasum -a 256 CraftLauncher-unsigned.ipa | cut -d' ' -f1)"
 
+      - name: Report bundle size
+        run: |
+          APP_PATH="${{ steps.locate.outputs.app }}"
+          echo "app bundle (uncompressed): $(du -sh "${APP_PATH}" | cut -f1)"
+          echo "ipa (as uploaded):        $(du -h CraftLauncher-unsigned.ipa | cut -f1)"
+          echo
+          # The IPA does not recompress the payload, so it stays close to the bundle
+          # size. Worth stating plainly: this counts against the account's storage.
+          echo "note: this artifact counts against the account's Actions storage."
+          echo "      public repository = no limit; free private = 500 MB total."
+
       - name: Upload .ipa
         uses: actions/upload-artifact@v4
         with:
           name: CraftLauncher-unsigned-ipa
           path: CraftLauncher-unsigned.ipa
-          retention-days: 30
+          # 14 rather than 90: one .ipa is ~280-300 MB, and on a free private repo
+          # the 500 MB storage quota would be exhausted by accumulated builds long
+          # before they expire on their own.
+          retention-days: ${{ github.event.inputs.artifact_retention_days || 14 }}
           if-no-files-found: error
 
       - name: Upload build log on failure
