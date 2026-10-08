@@ -1,0 +1,47 @@
+# Build artefacts
+build/
+DerivedData/
+*.xcuserstate
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/
+*.moved-aside
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# XcodeGen output. Generated from project.yml — do not commit, and do not edit
+# by hand: changes are lost the next time the project is regenerated.
+CraftLauncher.xcodeproj/
+
+# Runtime payload extracted by Scripts/bootstrap-runtime.sh.
+#
+# Deliberately not committed: it is ~266 MB of prebuilt GPL-3.0 binaries from
+# upstream projects, not source from this repository. The bootstrap script pins the
+# exact upstream version and verifies the download size, so one script run
+# reproduces it exactly.
+Runtime/java_runtimes/
+Runtime/Frameworks/
+Runtime/libs/
+Runtime/log4j-rce-patch-1.7.xml
+Runtime/log4j-rce-patch-1.12.xml
+Runtime/UPSTREAM-LICENSE
+
+# Bootstrap scratch space: the downloaded IPA and its extraction. Also holds the
+# throwaway inspection tools used to reverse-engineer the upstream bundle layout.
+.bootstrap/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# macOS
+.DS_Store
+._*
+
+# Editors
+.vscode/
+.idea/
+*.swp

@@ -1,0 +1,150 @@
+name: CraftLauncher
+options:
+  bundleIdPrefix: com.craftlauncher
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+
+settings:
+  base:
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "5.9"
+    IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+    CODE_SIGN_STYLE: Automatic
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+    # The JVM core is prebuilt; do not let Xcode try to build a module for it.
+    CLANG_ENABLE_MODULES: YES
+    SWIFT_EMIT_LOC_STRINGS: YES
+
+targets:
+  CraftLauncher:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+      - path: Resources
+        buildPhase: resources
+        optional: true
+
+      # The Java runtimes and graphics libraries, added as *folder references*.
+      #
+      # This is the one place where a normal `resources` entry would be wrong: it
+      # flattens files into the bundle root, which would destroy the JDK layout
+      # (`lib/server/libjvm.dylib`, `lib/jli/libjli.dylib`) that `JLI_Launch`
+      # depends on. A folder reference copies the directory verbatim, preserving
+      # structure, symlinks and permissions.
+      #
+      # Populated by Scripts/bootstrap-runtime.sh. Both are marked optional so the
+      # project still generates — and the app still builds — before that has run;
+      # the launcher then reports the missing runtimes clearly instead of failing
+      # at launch with no explanation.
+      - path: Runtime/java_runtimes
+        type: folder
+        buildPhase: resources
+        optional: true
+      - path: Runtime/Frameworks
+        type: folder
+        buildPhase: resources
+        optional: true
+
+      # The jars go to a flat `libs/` directory in the bundle, because that is what
+      # `-cp <bundle>/libs/*` points at. The bootstrap script has already merged
+      # `libs/`, `libs_caciocavallo/` and `libs_caciocavallo17/` into this one
+      # directory, so the wildcard picks up everything.
+      - path: Runtime/libs
+        type: folder
+        buildPhase: resources
+        optional: true
+
+      # Log4Shell patch configs, referenced by `-Dlog4j.configurationFile`. They
+      # belong at the bundle root alongside `libs/` and `Frameworks/`.
+      - path: Runtime/log4j-rce-patch-1.7.xml
+        buildPhase: resources
+        optional: true
+      - path: Runtime/log4j-rce-patch-1.12.xml
+        buildPhase: resources
+        optional: true
+
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.craftlauncher.ios
+        PRODUCT_NAME: CraftLauncher
+        INFOPLIST_FILE: Resources/Info.plist
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SWIFT_OBJC_BRIDGING_HEADER: Sources/Runtime/CraftLauncher-Bridging-Header.h
+        HEADER_SEARCH_PATHS:
+          - $(SRCROOT)/Sources/Runtime/include
+        # The runtime lives in the bundle, so nothing is linked or searched for at
+        # build time. `RuntimeBridge.mm` reaches it with `dlopen` at launch.
+        OTHER_LDFLAGS:
+          - -weak_framework
+          - Metal
+          - -weak_framework
+          - MetalKit
+          - -weak_framework
+          - GameController
+          - -weak_framework
+          - CoreHaptics
+          - -weak_framework
+          - Security
+        GCC_C_LANGUAGE_STANDARD: gnu17
+        CLANG_CXX_LANGUAGE_STANDARD: c++17
+        ENABLE_BITCODE: NO
+        # Java 17 needs a large virtual address space for compressed class space.
+        # The bridge checks the entitlement at runtime and falls back to
+        # -XX:-UseCompressedClassPointers when it is absent.
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited)
+
+    # Base entitlements, kept deliberately minimal so every signing path works:
+    # Xcode with a free or paid team, AltStore/SideStore, and 全能签-style
+    # certificate tools.
+    #
+    # Anything Apple reserves (`com.apple.private.*`, `com.apple.developer.kernel.*`)
+    # is intentionally NOT here. Those cannot be issued to a normal signing
+    # certificate, so including them makes the signature fail outright — and if a
+    # signer instead strips them silently, the app runs with fewer privileges than
+    # it was built for, which is harder to diagnose than an error.
+    #
+    # See Resources/CraftLauncher.entitlements for how to opt in to the privileged
+    # ones on a jailbroken device.
+    entitlements:
+      path: Resources/CraftLauncher.entitlements
+
+    info:
+      path: Resources/Info.plist
+      properties:
+        CFBundleDisplayName: CraftLauncher
+        CFBundleName: CraftLauncher
+        LSRequiresIPhoneOS: true
+        UILaunchScreen:
+          UIColorName: ""
+        UIRequiredDeviceCapabilities:
+          - arm64
+        UIStatusBarHidden: true
+        UIViewControllerBasedStatusBarAppearance: false
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+          - UIInterfaceOrientationPortrait
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: false
+        CFBundleURLTypes:
+          - CFBundleURLName: com.craftlauncher.ios.msauth
+            CFBundleURLSchemes:
+              - craftlauncher
+        ITSAppUsesNonExemptEncryption: false
+        # Advertised so TrollStore can hand the app the JIT entitlement.
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Minecraft Mod
+            LSItemContentTypes:
+              - public.java-archive
+            CFBundleTypeRole: Viewer

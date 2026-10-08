@@ -1,0 +1,221 @@
+name: Build unsigned IPA
+
+# Produces an unsigned CraftLauncher.ipa on a GitHub-hosted macOS runner.
+#
+# Why this exists: compiling for iOS needs Xcode, which only runs on macOS. A
+# GitHub Actions macOS runner supplies that without owning a Mac. The output is
+# deliberately **unsigned** — signing and installation are handled separately by a
+# certificate-based sideloading tool on the device.
+#
+# The Java runtime is NOT stored in this repository. It is ~400 MB of prebuilt
+# GPL-3.0 binaries from upstream projects, fetched fresh by
+# Scripts/bootstrap-runtime.sh on every run. Caching keeps repeat builds quick.
+
+on:
+  workflow_dispatch:
+    inputs:
+      pojav_version:
+        description: "PojavLauncher runtime version to build against"
+        required: false
+        default: "2.2"
+      skip_verify:
+        description: "Skip Scripts/verify.py (faster, not recommended)"
+        type: boolean
+        required: false
+        default: false
+  push:
+    branches: [main]
+    paths:
+      - "Sources/**"
+      - "Resources/**"
+      - "project.yml"
+      - "Scripts/**"
+      - ".github/workflows/build.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build .ipa
+    # macos-14 is Apple Silicon, which matches the arm64 slices in the runtime.
+    # An Intel runner would still work for building (the target arch is set by the
+    # SDK, not the host) but arm64 hosts are both faster and the default now.
+    runs-on: macos-14
+    timeout-minutes: 60
+
+    env:
+      POJAV_VERSION: ${{ github.event.inputs.pojav_version || '2.2' }}
+      SCHEME: CraftLauncher
+      PROJECT: CraftLauncher.xcodeproj
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show runner environment
+        run: |
+          echo "macOS:      $(sw_vers -productVersion)"
+          echo "Arch:       $(uname -m)"
+          echo "Xcode:      $(xcodebuild -version | head -1)"
+          echo "SDKs:"
+          xcodebuild -showsdks 2>/dev/null | grep -i ios || true
+
+      # Static checks first: they catch a broken rule engine or a bad argument
+      # template in seconds, before spending ten minutes on a build.
+      - name: Run static verification
+        if: ${{ github.event.inputs.skip_verify != 'true' }}
+        run: |
+          python3 Scripts/verify.py
+
+      - name: Install XcodeGen
+        run: |
+          if command -v xcodegen >/dev/null 2>&1; then
+            echo "already installed: $(xcodegen --version)"
+          else
+            brew install xcodegen
+          fi
+
+      # Fetching the runtime is the slow step on a cold cache: a 103 MB IPA, then
+      # extracting 266 MB of Java runtimes and graphics libraries. Caching it turns
+      # subsequent builds into under a minute.
+      - name: Cache Java runtime payload
+        id: runtime-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            Runtime/java_runtimes
+            Runtime/Frameworks
+            Runtime/libs
+            Runtime/log4j-rce-patch-1.7.xml
+            Runtime/log4j-rce-patch-1.12.xml
+          key: runtime-${{ env.POJAV_VERSION }}-${{ hashFiles('Scripts/bootstrap-runtime.sh') }}
+
+      - name: Fetch Java runtimes and graphics libraries
+        run: |
+          chmod +x Scripts/*.sh
+          ./Scripts/bootstrap-runtime.sh
+
+      - name: Report what was fetched
+        run: |
+          echo "=== extracted runtime ==="
+          du -sh Runtime 2>/dev/null || true
+          echo
+          echo "Frameworks: $(find Runtime/Frameworks -name '*.dylib' 2>/dev/null | wc -l | tr -d ' ') dylibs"
+          echo "libs:       $(find Runtime/libs -name '*.jar' 2>/dev/null | wc -l | tr -d ' ') jars"
+          echo
+          echo "Java runtimes:"
+          for jre in java-8-openjdk java-17-openjdk; do
+            home="Runtime/java_runtimes/${jre}"
+            if [[ -d "${home}" ]]; then
+              version="$(grep -m1 '^JAVA_VERSION=' "${home}/release" 2>/dev/null | cut -d'"' -f2 || echo '?')"
+              # Both libraries must be present or the launcher cannot start a JVM.
+              is8=0; [[ "${jre}" == java-8-* ]] && is8=1
+              jli="${home}/lib/libjli.dylib"; [[ ${is8} -eq 1 ]] && jli="${home}/lib/jli/libjli.dylib"
+              if [[ -f "${jli}" && -f "${home}/lib/server/libjvm.dylib" ]]; then
+                echo "  ok      ${jre}  (Java ${version})"
+              else
+                echo "::warning::${jre} is incomplete (missing libjli or libjvm)"
+              fi
+            else
+              echo "::warning::missing runtime ${jre} — game versions needing it will refuse to launch"
+            fi
+          done
+
+      - name: Generate Xcode project
+        run: ./Scripts/generate-project.sh
+
+      # Unsigned on purpose. Signing needs a developer team, and the certificate is
+      # applied later by the sideloading tool on the device side.
+      - name: Build
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project "${PROJECT}" \
+            -scheme "${SCHEME}" \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS="" \
+            ONLY_ACTIVE_ARCH=NO \
+            | tail -120
+
+      - name: Locate the built app
+        id: locate
+        run: |
+          APP_PATH="$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' -print -quit)"
+          if [[ -z "${APP_PATH}" ]]; then
+            echo "::error::no .app produced"
+            find build/Build/Products -maxdepth 3 -type d | head -40
+            exit 1
+          fi
+          echo "app=${APP_PATH}" >> "$GITHUB_OUTPUT"
+          echo "found: ${APP_PATH}"
+          du -sh "${APP_PATH}"
+
+          # The runtime must be inside the bundle or the app installs and then
+          # cannot start a JVM at all. This is the check that catches a project.yml
+          # folder-reference mistake, which would flatten the JDK layout.
+          echo "--- bundle checks ---"
+          failed=0
+          for required in Frameworks libs java_runtimes; do
+            if [[ -d "${APP_PATH}/${required}" ]]; then
+              echo "  ok      ${required}/"
+            else
+              echo "::error::bundle is missing ${required}/"
+              failed=1
+            fi
+          done
+
+          # The JDK layout must have survived the copy: JLI_Launch resolves libjvm
+          # relative to its own location, so a flattened tree is unusable.
+          for probe in \
+            "java_runtimes/java-8-openjdk/lib/jli/libjli.dylib" \
+            "java_runtimes/java-8-openjdk/lib/server/libjvm.dylib" \
+            "java_runtimes/java-17-openjdk/lib/libjli.dylib" \
+            "java_runtimes/java-17-openjdk/lib/server/libjvm.dylib" \
+            "libs/launcher.jar" \
+            "Frameworks/libMoltenVK.dylib"
+          do
+            if [[ -f "${APP_PATH}/${probe}" ]]; then
+              echo "  ok      ${probe}"
+            else
+              echo "::error::missing ${probe} — the bundle layout is wrong"
+              failed=1
+            fi
+          done
+
+          exit ${failed}
+
+      - name: Package as .ipa
+        run: |
+          APP_PATH="${{ steps.locate.outputs.app }}"
+          mkdir -p Payload
+          cp -R "${APP_PATH}" Payload/
+          # `ditto` rather than `zip`: it preserves symlinks and the executable bit,
+          # both of which the JDK inside the bundle depends on.
+          ditto -c -k --sequesterRsrc --keepParent Payload CraftLauncher-unsigned.ipa
+          ls -lh CraftLauncher-unsigned.ipa
+          echo "sha256: $(shasum -a 256 CraftLauncher-unsigned.ipa | cut -d' ' -f1)"
+
+      - name: Upload .ipa
+        uses: actions/upload-artifact@v4
+        with:
+          name: CraftLauncher-unsigned-ipa
+          path: CraftLauncher-unsigned.ipa
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: |
+            build/**/*.log
+            ~/Library/Logs/**/*.xcactivitylog
+          retention-days: 7
+          if-no-files-found: ignore

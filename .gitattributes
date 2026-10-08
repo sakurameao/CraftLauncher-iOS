@@ -1,0 +1,43 @@
+# Line ending policy.
+#
+# Windows checkouts default to `core.autocrlf=true`, which rewrites line endings on
+# checkout. For the shell scripts that is not a style preference — it is a build
+# failure: a `#!/usr/bin/env bash` script with CRLF endings dies on Linux and macOS
+# with
+#
+#     /bin/bash^M: bad interpreter: No such file or directory
+#
+# because the kernel looks for an interpreter literally named `bash\r`. GitHub
+# Actions runs on Linux and macOS, so without this file the bootstrap script would
+# never execute there.
+#
+# `text eol=lf` forces LF in the working tree on every platform.
+
+# Shell scripts — must be LF or they cannot be executed.
+*.sh          text eol=lf
+
+# Python — a CRLF shebang breaks the same way.
+*.py          text eol=lf
+
+# Sources: LF everywhere for consistent diffs across platforms.
+*.swift       text eol=lf
+*.h           text eol=lf
+*.m           text eol=lf
+*.mm          text eol=lf
+*.c           text eol=lf
+
+# Configuration and docs.
+*.yml         text eol=lf
+*.yaml        text eol=lf
+*.md          text eol=lf
+*.json        text eol=lf
+*.entitlements text eol=lf
+
+# Binary assets must never be line-ending converted.
+*.ipa         binary
+*.dylib       binary
+*.jar         binary
+*.zip         binary
+*.tar.xz      binary
+*.png         binary
+*.ttf         binary

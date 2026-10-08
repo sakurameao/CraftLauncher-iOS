@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+    CraftLauncher entitlements.
+
+    Kept to the minimum that is valid for every signing path, because an
+    entitlement the signer cannot issue does not degrade gracefully — it makes the
+    whole signature fail, or gets stripped silently and leaves the app running with
+    privileges it never had.
+
+    ── What each key does here ──────────────────────────────────────────────────
+
+    get-task-allow
+        Lets a debugger attach to the process. SideStore / AltStore / SideJITServer
+        rely on exactly this to hand out JIT, and Xcode needs it for a Debug build.
+        Free and paid developer certificates both accept it.
+        Note: a distribution or App Store profile will reject it, which is expected
+        — this app is not distributable through the App Store anyway.
+
+    com.apple.security.cs.disable-library-validation
+        Required to `dlopen` a library that was not signed by the same team as the
+        app. The Java runtime ships its own dylibs, so without this the JVM cannot
+        load and the launch dies at `dlopen(libjli.dylib)`.
+        A jailbreak or TrollStore grants this implicitly; on a stock device with a
+        personal certificate it is accepted, which is why it stays in the base set.
+
+    ── Deliberately absent ─────────────────────────────────────────────────────
+
+    com.apple.private.memorystatus
+    com.apple.developer.kernel.extended-virtual-addressing
+        Privileged. They raise the jetsam memory ceiling and unlock a large virtual
+        address space (which Java 17 wants for compressed class pointers). Only a
+        jailbreak, TrollStore, or a special Apple grant can issue them.
+        LauncherPipeline probes for them at runtime and adapts:
+          * memory entitlement missing  → allocation capped at 25% of physical RAM
+            instead of 40%
+          * extended-VA missing         → adds -XX:-UseCompressedClassPointers
+        So the app works without them. Uncomment the two keys below ONLY if you are
+        signing on a jailbroken device with a tool that can inject them
+        (全能签 / 轻松签 on a jailbroken device can; on a stock device they will
+        break the signature).
+
+    com.apple.security.cs.allow-jit
+    com.apple.security.cs.allow-unsigned-executable-memory
+        Removed on purpose: these are macOS hardened-runtime keys. They have no
+        meaning on iOS, where JIT is gated by the kernel's own
+        `dynamic-codesigning` entitlement (plus the CS_DEBUGGED flag a debugger
+        attach sets). Carrying them here only adds a way for signing to fail.
+
+        <key>com.apple.private.memorystatus</key>
+        <true/>
+        <key>com.apple.developer.kernel.extended-virtual-addressing</key>
+        <true/>
+-->
+<plist version="1.0">
+<dict>
+	<key>get-task-allow</key>
+	<true/>
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
+</dict>
+</plist>
