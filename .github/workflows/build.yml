@@ -96,24 +96,6 @@ jobs:
       # Fail early and legibly if the project format and the toolchain disagree.
       # Without this the symptom is an opaque "Unable to read project" from
       # xcodebuild, several minutes into a run.
-      - name: Verify the project can be read before building
-        run: |
-          test -d "${PROJECT}" || { echo "::error::${PROJECT} 不存在，xcodegen 没有生成成功"; exit 1; }
-
-          FORMAT="$(grep -m1 'objectVersion' "${PROJECT}/project.pbxproj" | tr -dc '0-9')"
-          echo "project objectVersion = ${FORMAT}"
-
-          if ! xcodebuild -list -project "${PROJECT}" > /dev/null 2>&1; then
-            echo "::error::xcodebuild 无法读取 ${PROJECT}。多半是工程格式高于当前 Xcode 能读的版本。"
-            echo "  xcodebuild: $(xcodebuild -version | head -1)"
-            echo "  objectVersion: ${FORMAT}"
-            echo "  检查 project.yml 的 options.projectFormat"
-            xcodebuild -list -project "${PROJECT}" 2>&1 | head -20
-            exit 1
-          fi
-          echo "✓ 工程可读"
-          xcodebuild -list -project "${PROJECT}"
-
       # Static checks first: they catch a broken rule engine or a bad argument
       # template in seconds, before spending ten minutes on a build.
       - name: Run static verification
@@ -185,6 +167,34 @@ jobs:
 
       - name: Generate Xcode project
         run: ./Scripts/generate-project.sh
+
+      # Readability check, placed *after* generation — it has nothing to verify
+      # before the project exists.
+      #
+      # XcodeGen writes objectVersion 77 by default, which Xcode 15 cannot open:
+      #
+      #     Unable to read project 'CraftLauncher.xcodeproj'
+      #     Reason: ... future Xcode project file format (77)
+      #
+      # project.yml pins `projectFormat: xcode15_3` to avoid that. This step makes a
+      # regression fail immediately and legibly instead of surfacing as an opaque
+      # xcodebuild error.
+      - name: Verify the generated project is readable
+        run: |
+          test -d "${PROJECT}" || { echo "::error::${PROJECT} 不存在，xcodegen 没有生成成功"; exit 1; }
+
+          FORMAT="$(grep -m1 'objectVersion' "${PROJECT}/project.pbxproj" | tr -dc '0-9')"
+          echo "project objectVersion = ${FORMAT}"
+          echo "xcodebuild: $(xcodebuild -version | head -1)"
+
+          if ! xcodebuild -list -project "${PROJECT}" > /dev/null 2>&1; then
+            echo "::error::xcodebuild 无法读取 ${PROJECT} —— 多半是工程格式高于当前 Xcode 能读的版本"
+            echo "  objectVersion: ${FORMAT}"
+            echo "  检查 project.yml 的 options.projectFormat"
+            xcodebuild -list -project "${PROJECT}" 2>&1 | head -20
+            exit 1
+          fi
+          echo "✓ 工程可读"
 
       # Unsigned on purpose. Signing needs a developer team, and the certificate is
       # applied later by the sideloading tool on the device side.
