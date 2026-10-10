@@ -23,6 +23,19 @@ typedef NS_ENUM(NSInteger, CLJITStatus) {
     CLJITStatusUnknown = 2,
 };
 
+/// The Objective-C surface Swift talks to.
+///
+/// This `@interface` was missing at one point — the method declarations below were
+/// left bare, which clang reports as:
+///
+///     error: missing context for method declaration
+///     error: expected method body
+///
+/// Both messages are worth recognising: they mean a class declaration was deleted,
+/// not that the methods themselves are wrong. The failure only surfaces when the
+/// bridging header is compiled, which is several minutes into a CI build.
+@interface RuntimeBridge : NSObject
+
 /// Probes whether this process may JIT.
 ///
 /// A JIT entitlement may be granted *after* this call (AltStore/SideStore attach a
@@ -103,5 +116,7 @@ typedef NS_ENUM(NSInteger, CLJITStatus) {
 /// Whether the process carries `com.apple.private.memorystatus`, which raises the
 /// jetsam ceiling and lets the launcher allocate a larger heap.
 + (BOOL)hasExtendedMemoryEntitlement;
+
+@end
 
 NS_ASSUME_NONNULL_END

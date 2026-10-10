@@ -1274,6 +1274,130 @@ def check_workflows(report: Report) -> None:
     )
 
 
+def check_objc_class_declarations(report: Report) -> None:
+    """Objective-C method declarations must sit inside an @interface or @implementation.
+
+    A missing `@interface RuntimeBridge : NSObject` shipped once. Every method
+    declaration after it was then bare, and clang reported it as ten separate errors:
+
+        error: missing context for method declaration
+        error: expected method body
+
+    Neither message mentions the real cause, and the failure only appears when the
+    bridging header is compiled — which is to say, several minutes into a CI build.
+    Catching it here costs nothing.
+    """
+    report.start("Objective-C 类声明完整性")
+
+    sources = sorted(
+        list((PROJECT_ROOT / "Sources").rglob("*.h"))
+        + list((PROJECT_ROOT / "Sources").rglob("*.m"))
+        + list((PROJECT_ROOT / "Sources").rglob("*.mm"))
+    )
+    if not sources:
+        report.check("找到 Objective-C 源文件", False)
+        return
+
+    problems: list[str] = []
+
+    for path in sources:
+        # Strip comments so an `@interface` mentioned in prose is not counted.
+        text = strip_objc_comments(path.read_text(encoding="utf-8"))
+
+        # Balance of class-level blocks.
+        opened = len(re.findall(r"@(?:interface|implementation|protocol)\s+\w+", text))
+        closed = len(re.findall(r"@end\b", text))
+        if opened != closed:
+            problems.append(
+                f"{path.name}: {opened} 个 @interface/@implementation/@protocol "
+                f"对 {closed} 个 @end"
+            )
+
+        # Method declarations outside any class block.
+        inside = 0
+        for number, line in enumerate(text.split("\n"), start=1):
+            stripped = line.strip()
+            if re.match(r"@(?:interface|implementation|protocol)\s+\w+", stripped):
+                inside += 1
+            elif re.match(r"@end\b", stripped):
+                inside = max(0, inside - 1)
+            elif re.match(r"[+-]\s*\(", stripped) and inside == 0:
+                problems.append(
+                    f"{path.name}:{number}: 方法声明不在 @interface/@implementation 内 → "
+                    f"{stripped[:60]}"
+                )
+
+    report.check(
+        "所有 Objective-C 方法声明都在类块内，@interface/@end 配对",
+        not problems,
+        "\n".join(problems[:15]) + ("\n…" if len(problems) > 15 else ""),
+    )
+
+    # The bridging header is what Swift compiles first; a syntax error there fails
+    # the whole target before any Swift is type-checked.
+    bridging = PROJECT_ROOT / "Sources" / "Runtime" / "CraftLauncher-Bridging-Header.h"
+    if bridging.is_file():
+        text = bridging.read_text(encoding="utf-8")
+        report.check(
+            "桥接头文件引入了 RuntimeBridge.h",
+            "RuntimeBridge.h" in text,
+        )
+
+        bridge_header = PROJECT_ROOT / "Sources" / "Runtime" / "RuntimeBridge.h"
+        if bridge_header.is_file():
+            header = bridge_header.read_text(encoding="utf-8")
+            report.check(
+                "RuntimeBridge.h 声明了 @interface RuntimeBridge",
+                re.search(r"@interface\s+RuntimeBridge\b", header) is not None,
+                "缺少它会让每个方法声明都报 'missing context for method declaration'",
+            )
+            report.check(
+                "RuntimeBridge.h 有对应的 @end",
+                re.search(r"@end\b", header) is not None,
+            )
+
+            # Every method Swift calls must be declared *and* implemented, or the
+            # link fails with an unrecognised selector at runtime.
+            impl = PROJECT_ROOT / "Sources" / "Runtime" / "RuntimeBridge.mm"
+            if impl.is_file():
+                declared = set(re.findall(r"^\+\s*\([^)]*\)\s*(\w+)", header, re.MULTILINE))
+                implemented = set(
+                    re.findall(r"^\+\s*\([^)]*\)\s*(\w+)", impl.read_text(encoding="utf-8"), re.MULTILINE)
+                )
+                missing = declared - implemented
+                report.check(
+                    f"RuntimeBridge 的 {len(declared)} 个类方法全部有实现",
+                    not missing,
+                    f"声明了但没有实现: {sorted(missing)}",
+                )
+
+
+def strip_objc_comments(text: str) -> str:
+    """Removes // and /* */ comments, preserving line count so line numbers hold."""
+    out: list[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        if text.startswith("//", i):
+            end = text.find("\n", i)
+            if end == -1:
+                out.append(" " * (n - i))
+                break
+            out.append(" " * (end - i))
+            i = end
+            continue
+        if text.startswith("/*", i):
+            end = text.find("*/", i + 2)
+            end = n if end == -1 else end + 2
+            # Keep the newlines so line numbering is unaffected.
+            out.append("".join(ch if ch == "\n" else " " for ch in text[i:end]))
+            i = end
+            continue
+        out.append(text[i])
+        i += 1
+    return "".join(out)
+
+
 def check_swift_structure(report: Report) -> None:
     report.start("Swift 源码结构")
 
@@ -2054,6 +2178,7 @@ def main() -> int:
     check_entitlements(report)
     check_required_imports(report)
     check_cross_file_call_sites(report)
+    check_objc_class_declarations(report)
     check_workflows(report)
     check_swift_structure(report)
     check_no_obvious_api_mistakes(report)
