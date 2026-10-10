@@ -6,6 +6,23 @@ options:
   createIntermediateGroups: true
   groupSortPosition: top
 
+  # Pin the generated project format.
+  #
+  # XcodeGen defaults this to `xcode16_0`, whose objectVersion is 77. Xcode 15
+  # cannot open that and fails with:
+  #
+  #     Unable to read project 'CraftLauncher.xcodeproj'
+  #     Reason: ... future Xcode project file format (77)
+  #
+  # That is exactly what happened on the first CI run: `macos-14` ships Xcode 15.4,
+  # so the project was written in a format the compiler refused to read. This is
+  # reported upstream as yonaskolb/XcodeGen#1578.
+  #
+  # `xcode15_3` keeps the project readable by Xcode 15.3 and later, which covers
+  # every runner currently in use. Raising it requires raising the runner's Xcode
+  # too — the workflow pins a version explicitly so the two cannot drift apart.
+  projectFormat: xcode15_3
+
 settings:
   base:
     MARKETING_VERSION: "1.0.0"

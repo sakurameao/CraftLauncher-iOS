@@ -1135,6 +1135,41 @@ def check_workflows(report: Report) -> None:
             "CODE_SIGNING_ALLOWED=NO" in text,
         )
 
+        # The generated project format must be readable by the runner's Xcode.
+        #
+        # XcodeGen defaults `projectFormat` to `xcode16_0`, whose objectVersion is
+        # 77, which Xcode 15 cannot open:
+        #
+        #     Unable to read project 'CraftLauncher.xcodeproj'
+        #     Reason: ... future Xcode project file format (77)
+        #
+        # macos-14 ships Xcode 15.4, so the default broke the very first CI build.
+        # Reported upstream as yonaskolb/XcodeGen#1578.
+        project_yml = (PROJECT_ROOT / "project.yml").read_text(encoding="utf-8")
+        report.check(
+            "project.yml 固定了 projectFormat（默认 xcode16_0 在 Xcode 15 上打不开）",
+            "projectFormat:" in project_yml,
+            "缺少这一行会让 xcodebuild 报 'future Xcode project file format'",
+        )
+        format_match = re.search(r"projectFormat:\s*(\S+)", project_yml)
+        if format_match:
+            value = format_match.group(1)
+            report.check(
+                f"projectFormat = {value} 兼容 runner 的 Xcode 15",
+                not value.startswith("xcode16"),
+                "xcode16_* 需要 Xcode 16，而 macos-14 上是 15.4",
+            )
+        else:
+            report.check("能解析出 projectFormat 的值", False)
+
+        # Verifying readability before building turns a confusing late failure into
+        # an immediate, specific one.
+        report.check(
+            "CI 在构建前先校验工程可读性",
+            "xcodebuild -list -project" in text,
+            "否则格式不匹配会以 'Unable to read project' 的形式晚几分钟才暴露",
+        )
+
         # A single .ipa is ~280-300 MB. GitHub's default artifact retention is 90
         # days and artifacts count against the account's Actions storage — 500 MB on
         # a free private repo. Leaving the default would exhaust the quota after two

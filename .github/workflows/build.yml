@@ -71,6 +71,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Pin Xcode explicitly instead of relying on the runner's default.
+      #
+      # `macos-14` defaults to Xcode 15.4, which cannot open the project format
+      # XcodeGen writes by default (objectVersion 77, "future Xcode project file
+      # format"). project.yml now pins `projectFormat: xcode15_3`, and this keeps
+      # the toolchain from drifting underneath it.
+      - name: Select Xcode
+        run: |
+          # 15.4 is the newest on macos-14 and is what the project format targets.
+          if [[ -d /Applications/Xcode_15.4.app ]]; then
+            sudo xcode-select -s /Applications/Xcode_15.4.app
+          fi
+          xcodebuild -version
+
       - name: Show runner environment
         run: |
           echo "macOS:      $(sw_vers -productVersion)"
@@ -78,6 +92,27 @@ jobs:
           echo "Xcode:      $(xcodebuild -version | head -1)"
           echo "SDKs:"
           xcodebuild -showsdks 2>/dev/null | grep -i ios || true
+
+      # Fail early and legibly if the project format and the toolchain disagree.
+      # Without this the symptom is an opaque "Unable to read project" from
+      # xcodebuild, several minutes into a run.
+      - name: Verify the project can be read before building
+        run: |
+          test -d "${PROJECT}" || { echo "::error::${PROJECT} 不存在，xcodegen 没有生成成功"; exit 1; }
+
+          FORMAT="$(grep -m1 'objectVersion' "${PROJECT}/project.pbxproj" | tr -dc '0-9')"
+          echo "project objectVersion = ${FORMAT}"
+
+          if ! xcodebuild -list -project "${PROJECT}" > /dev/null 2>&1; then
+            echo "::error::xcodebuild 无法读取 ${PROJECT}。多半是工程格式高于当前 Xcode 能读的版本。"
+            echo "  xcodebuild: $(xcodebuild -version | head -1)"
+            echo "  objectVersion: ${FORMAT}"
+            echo "  检查 project.yml 的 options.projectFormat"
+            xcodebuild -list -project "${PROJECT}" 2>&1 | head -20
+            exit 1
+          fi
+          echo "✓ 工程可读"
+          xcodebuild -list -project "${PROJECT}"
 
       # Static checks first: they catch a broken rule engine or a bad argument
       # template in seconds, before spending ten minutes on a build.
