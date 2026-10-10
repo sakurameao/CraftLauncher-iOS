@@ -1279,6 +1279,75 @@ def check_workflows(report: Report) -> None:
     )
 
 
+def check_private_frameworks(report: Report) -> None:
+    """No private SDK headers, and the private symbols we do need are declared locally.
+
+    `SecTask.h` is not in the public iOS SDK, so importing it fails the build with:
+
+        fatal error: 'Security/SecTask.h' file not found
+
+    The two functions it declares are available and linkable — the upstream
+    PojavLauncher binary weakly binds both — so they are forward-declared in
+    RuntimeBridge.mm instead. This check keeps the private import from creeping back,
+    and keeps the declarations present.
+    """
+    report.start("私有头文件与私有符号")
+
+    runtime = PROJECT_ROOT / "Sources" / "Runtime"
+    bridge_mm = runtime / "RuntimeBridge.mm"
+    if not bridge_mm.is_file():
+        report.check("找到 RuntimeBridge.mm", False)
+        return
+
+    text = bridge_mm.read_text(encoding="utf-8")
+
+    report.check(
+        "没有 import 私有的 Security/SecTask.h",
+        not re.search(r"^\s*#\s*(?:import|include)\s*<Security/SecTask\.h>", text, re.MULTILINE),
+        "该头文件不在公开 iOS SDK 里，会导致 'file not found'",
+    )
+    report.check(
+        "自行声明了 SecTaskCreateFromSelf",
+        "SecTaskCreateFromSelf" in text,
+    )
+    report.check(
+        "自行声明了 SecTaskCopyValueForEntitlement",
+        "SecTaskCopyValueForEntitlement" in text,
+    )
+    report.check(
+        "私有符号声明为 weak_import（将来被移除时降级而非崩溃）",
+        "weak_import" in text,
+        "探针只影响提示文案，不该让 App 起不来",
+    )
+
+    # A public-SDK-only sweep over every Objective-C file.
+    private_headers = [
+        "Security/SecTask.h",
+        "MobileCoreServices/",
+        "SpringBoardServices/",
+        "BackBoardServices/",
+        "libproc.h",
+        "sys/kern_memorystatus.h",
+        "rocketbootstrap.h",
+    ]
+    offenders: list[str] = []
+    for path in list((PROJECT_ROOT / "Sources").rglob("*.mm")) + list(
+        (PROJECT_ROOT / "Sources").rglob("*.m")
+    ) + list((PROJECT_ROOT / "Sources").rglob("*.h")):
+        body = path.read_text(encoding="utf-8")
+        for header in private_headers:
+            for match in re.finditer(r"^\s*#\s*(?:import|include)\s*[<\"]([^>\"]+)[>\"]", body, re.MULTILINE):
+                if header.rstrip("/") in match.group(1):
+                    line = body.count("\n", 0, match.start()) + 1
+                    offenders.append(f"{path.name}:{line}  {match.group(1)}")
+
+    report.check(
+        "没有引用私有或 jailbreak 专属头文件",
+        not offenders,
+        "\n".join(offenders[:10]),
+    )
+
+
 def check_objc_class_declarations(report: Report) -> None:
     """Objective-C method declarations must sit inside an @interface or @implementation.
 
@@ -1906,12 +1975,13 @@ def check_entitlements(report: Report) -> None:
         "RuntimeLauncher.entitlements.extendedMemory" in pipeline,
         "不要在这边再写一份 SecTask 探测 —— 桥接层已经有了",
     )
-    # `SecTaskCopyValueForEntitlement` also appears once in a doc comment, so count
-    # the actual calls (`(` immediately after the name) rather than raw occurrences.
+    # `SecTaskCopyValueForEntitlement` also appears in a doc comment and in the
+    # local forward declaration (the private header is unavailable), so count only
+    # *call* sites: the name preceded by `=`.
     report.check(
         "权限探测只有一处实现",
-        pipeline.count("SecTaskCopyValueForEntitlement(") == 0
-        and bridge_mm.count("SecTaskCopyValueForEntitlement(") == 1,
+        pipeline.count("= SecTaskCopyValueForEntitlement(") == 0
+        and bridge_mm.count("= SecTaskCopyValueForEntitlement(") == 1,
         "重复实现会出现两份可能不一致的答案",
     )
 
@@ -2289,6 +2359,7 @@ def main() -> int:
     check_entitlements(report)
     check_required_imports(report)
     check_cross_file_call_sites(report)
+    check_private_frameworks(report)
     check_objc_class_declarations(report)
     check_swift_availability(report)
     check_renderer_backends(report)

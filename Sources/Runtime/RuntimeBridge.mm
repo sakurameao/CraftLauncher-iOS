@@ -29,8 +29,35 @@
 
 #import <mach-o/dyld.h>
 
-// Needed for the entitlement probes below.
-#import <Security/SecTask.h>
+// Entitlement probes.
+//
+// `SecTask.h` is a **private** header: it does not exist in the public iOS SDK, so
+// `#import <Security/SecTask.h>` fails with
+//
+//     fatal error: 'Security/SecTask.h' file not found
+//
+// The functions themselves are available and linkable; they are simply not declared
+// for third parties. Evidence: the upstream PojavLauncher binary lists
+// `_SecTaskCreateFromSelf` and `_SecTaskCopyValueForEntitlement` as weakly-bound
+// undefined symbols, so a shipping app already resolves them at runtime. Declaring
+// them here achieves the same thing without the private header.
+//
+// Marked weak so that if a future iOS withdraws them, the probes degrade to "no
+// entitlement visible" rather than preventing the app from launching. They are
+// advisory: a wrong answer changes a warning, never a decision to launch.
+extern "C" {
+
+typedef struct __SecTask *SecTaskRef;
+
+SecTaskRef SecTaskCreateFromSelf(CFAllocatorRef allocator)
+    __attribute__((weak_import));
+
+CFTypeRef SecTaskCopyValueForEntitlement(SecTaskRef task,
+                                         CFStringRef entitlement,
+                                         CFErrorRef *error)
+    __attribute__((weak_import));
+
+}
 
 // The header types are stable across JDK 8 through JDK 25 — verified against both
 // `jdk8u/jdk/src/share/bin/java.h` and `jdk17u/src/java.base/share/native/libjli/java.h`,
@@ -57,6 +84,14 @@ static NSString *g_lastDynamicLoadError = nil;
 /// source .entitlements file asked for. A key that was stripped during signing
 /// reads back as absent.
 static BOOL CLHasEntitlement(CFStringRef key) {
+    // A weak-imported symbol resolves to NULL when the platform does not provide it,
+    // so calling through it unchecked would crash rather than degrade. The comment on
+    // the declarations above promises a graceful fallback; this is what makes that
+    // true.
+    if (SecTaskCreateFromSelf == NULL || SecTaskCopyValueForEntitlement == NULL) {
+        return NO;
+    }
+
     SecTaskRef task = SecTaskCreateFromSelf(kCFAllocatorDefault);
     if (!task) { return NO; }
 
