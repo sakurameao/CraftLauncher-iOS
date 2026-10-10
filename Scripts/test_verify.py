@@ -23,6 +23,7 @@ Usage:
 from __future__ import annotations
 
 import io
+import re
 import sys
 import unittest
 from contextlib import redirect_stdout
@@ -419,10 +420,8 @@ class ProjectConsistencyTests(unittest.TestCase):
     def test_curl_resume_is_conditional(self) -> None:
         """`curl -C -` must only be used when a partial file exists.
 
-        With no local file, curl sends `Range: bytes=1-` and GitHub's release CDN
-        answers 404 rather than 200 or 416. That aborted a real CI run with exit
-        code 56 — the resume flag, added to cope with a throttled home network, broke
-        the build on a well-connected runner that had nothing to resume.
+        With no local file, curl sends `Range: bytes=1-`, which some endpoints
+        answer with an error rather than 200 or 416.
         """
         text = (SCRIPT_DIR / "bootstrap-runtime.sh").read_text(encoding="utf-8")
 
@@ -438,6 +437,48 @@ class ProjectConsistencyTests(unittest.TestCase):
         # And the guard must exist, keyed on the file being non-empty.
         self.assertIn("RESUME_FLAG", text)
         self.assertIn('-s "${CANDIDATE}"', text, "判断部分文件是否存在的条件不见了")
+
+    def test_release_asset_name_is_spelled_correctly(self) -> None:
+        """The asset is `pojavlaunch**er**`; the Java package is `pojavlaunch`.
+
+        Mixing the two produced an HTTP 404 that was indistinguishable from a
+        network block, and sent a real debugging session chasing a CDN that was
+        working fine. Asserting both spellings in their correct places makes the
+        mistake impossible to repeat silently.
+        """
+        text = (SCRIPT_DIR / "bootstrap-runtime.sh").read_text(encoding="utf-8")
+
+        match = re.search(r'POJAV_IPA_NAME="([^"]+)"', text)
+        self.assertIsNotNone(match, "找不到 POJAV_IPA_NAME 定义")
+        asset_name = match.group(1)
+
+        self.assertIn(
+            "pojavlauncher-", asset_name,
+            "release 资产名是 pojavlauncher（带 er）",
+        )
+        self.assertNotIn(
+            "pojavlaunch-", asset_name,
+            "pojavlaunch（不带 er）是 Java 包名，不是文件名",
+        )
+
+        # The Java-side entry point keeps the other spelling; both must coexist.
+        self.assertIn("net.kdt.pojavlaunch.PojavLauncher", text)
+
+    def test_json_parsing_is_not_done_in_shell(self) -> None:
+        """Shell JSON parsing was the second failure in this area.
+
+        `tr ',' '\\n'` splits inside string values, so line-number-based extraction
+        is unsound, and its failures look exactly like a network error.
+        """
+        text = (SCRIPT_DIR / "bootstrap-runtime.sh").read_text(encoding="utf-8")
+
+        for marker in ("assets_url", "ASSET_ID", "NAME_LINE"):
+            self.assertNotIn(
+                marker, text,
+                f"bootstrap 脚本又出现了 shell JSON 解析（{marker}）；应交给 node",
+            )
+
+        self.assertIn("node -e", text, "API 回退路径应当用 node 解析 JSON")
 
     def test_scripts_are_lf_only(self) -> None:
         # A CRLF shebang fails on Linux/macOS with "/bin/bash^M: bad interpreter".

@@ -113,6 +113,11 @@ jobs:
           key: runtime-${{ env.POJAV_VERSION }}-${{ hashFiles('Scripts/bootstrap-runtime.sh') }}
 
       - name: Fetch Java runtimes and graphics libraries
+        env:
+          # Passed through so bootstrap-runtime.sh can use it on its API fallback
+          # path, where it raises the GitHub rate limit. The asset is public, so the
+          # script works without this too.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           chmod +x Scripts/*.sh
           ./Scripts/bootstrap-runtime.sh

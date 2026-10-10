@@ -28,10 +28,21 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 # Pinned so a rebuild reproduces the same runtime.
+POJAV_REPO="PojavLauncherTeam/PojavLauncher_iOS"
 POJAV_VERSION="2.2"
-POJAV_IPA_URL="https://github.com/PojavLauncherTeam/PojavLauncher_iOS/releases/download/v${POJAV_VERSION}/net.kdt.pojavlaunch-${POJAV_VERSION}-ios.ipa"
-# Used to verify the download; also proves the file is the release, not a partial.
+# Note the spelling: the *release asset* is `pojavlaunch**er**-...`, while the Java
+# package is `net.kdt.pojavlaunch.PojavLauncher` (no "er"). Mixing the two produces
+# a 404 that looks exactly like a network block, which is how this script spent a
+# while chasing a CDN that was never the problem.
+POJAV_IPA_NAME="net.kdt.pojavlauncher-${POJAV_VERSION}-ios.ipa"
+# Verified against the release API; also proves a download is the real file and not
+# a truncated one.
 POJAV_IPA_BYTES=108175347
+
+# Optional. The asset is public, so a token is not required — but supplying one
+# raises the GitHub API rate limit, which matters if the fallback path is used
+# repeatedly, and GitHub Actions provides one automatically.
+GITHUB_TOKEN_VALUE="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
 
 # ── Output helpers ────────────────────────────────────────────────────────────
 
@@ -111,40 +122,104 @@ elif [[ -f "${CANDIDATE}" ]] && [[ "$(file_size "${CANDIDATE}")" == "${POJAV_IPA
   ok "复用已下载的 IPA（删除它可强制重新下载）"
 else
   step "下载 PojavLauncher ${POJAV_VERSION}（约 103 MB）"
-  note "${POJAV_IPA_URL}"
-  note "国内直连 GitHub 很慢；如果卡住，用 --ipa 指定手动下好的文件。"
 
-  if command -v curl >/dev/null 2>&1; then
-    # Resume matters on a throttled home network: GitHub is slow there and resets
-    # connections often, and re-downloading 103 MB from scratch each time is
-    # painful.
-    #
-    # `-C -` is only valid when the target file already EXISTS. With no local file
-    # curl sends `Range: bytes=1-`, and GitHub's release CDN answers **404** rather
-    # than 200 or 416 — which aborted a CI run with exit code 56. A GitHub-hosted
-    # runner has a fast link and no partial file, so resume is both unnecessary and
-    # harmful there.
-    RESUME_FLAG=""
-    if [[ -s "${CANDIDATE}" ]]; then
-      RESUME_FLAG="-C -"
-      note "发现已有的部分文件，将尝试续传"
-    fi
+  BROWSER_URL="https://github.com/${POJAV_REPO}/releases/download/v${POJAV_VERSION}/${POJAV_IPA_NAME}"
 
+  if ! command -v curl >/dev/null 2>&1; then
+    fail "需要 curl 来下载。请手动下载后用 --ipa 指定："
+    note "  ${BROWSER_URL}"
+    exit 1
+  fi
+
+  # Resume only makes sense when a partial file is already present. `-C -` with no
+  # local file sends `Range: bytes=1-`, which some endpoints answer with an error.
+  RESUME_FLAG=""
+  if [[ -s "${CANDIDATE}" ]]; then
+    RESUME_FLAG="-C -"
+    note "发现部分文件（$(file_size "${CANDIDATE}") 字节），尝试续传"
+  fi
+
+  # A `once` helper, because the same curl invocation is tried against two URLs.
+  download_ipa() {
     curl --fail --location --progress-bar \
          --retry 5 --retry-delay 2 --retry-all-errors \
-         ${RESUME_FLAG} --output "${CANDIDATE}" "${POJAV_IPA_URL}" \
-      || { fail "下载失败。本机网络受限时可先用 --ipa 指定手动下好的文件。"; exit 1; }
-  elif command -v wget >/dev/null 2>&1; then
-    # Same reasoning: `--continue` is only meaningful for an existing file.
-    if [[ -s "${CANDIDATE}" ]]; then
-      wget --continue --tries=5 --output-document="${CANDIDATE}" "${POJAV_IPA_URL}"
-    else
-      wget --tries=5 --output-document="${CANDIDATE}" "${POJAV_IPA_URL}"
+         ${RESUME_FLAG} --output "${CANDIDATE}" "$1"
+  }
+
+  step "下载 IPA"
+  if ! download_ipa "${BROWSER_URL}"; then
+    # Fallback: resolve the asset through the API and fetch it by id.
+    #
+    # The primary path — the plain `releases/download/...` URL — is the simple one
+    # and is what normally runs. This fallback exists because that URL redirects to
+    # `objects.githubusercontent.com`, which has been seen to fail on some routes,
+    # and because the API endpoint serves the bytes directly and supports ranges.
+    #
+    # Node is used for the JSON, not shell parsing. An earlier attempt used
+    # `tr ',' '\n'` + `grep -n` + `sed`, which breaks on any string containing a
+    # comma and whose failures look identical to a network problem — that ambiguity
+    # cost real debugging time on a bug that was actually a misspelled filename.
+    warn "直连 releases/download 失败，改走 API 资产端点"
+    rm -f "${CANDIDATE}"
+
+    if command -v node >/dev/null 2>&1; then
+      export POJAV_REPO POJAV_VERSION POJAV_IPA_NAME
+      ASSET_URL="$(node -e '
+        const headers = {
+          "User-Agent": "CraftLauncher",
+          Accept: "application/vnd.github+json",
+        };
+        if (process.env.GITHUB_TOKEN) {
+          headers.Authorization = "Bearer " + process.env.GITHUB_TOKEN;
+        }
+        const url =
+          "https://api.github.com/repos/" + process.env.POJAV_REPO +
+          "/releases/tags/v" + process.env.POJAV_VERSION;
+        fetch(url, { headers, signal: AbortSignal.timeout(30000) })
+          .then((r) => (r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status))))
+          .then((release) => {
+            const asset = (release.assets || []).find(
+              (a) => a.name === process.env.POJAV_IPA_NAME
+            );
+            if (!asset) {
+              console.error(
+                "资产不存在。release 里有: " +
+                (release.assets || []).map((a) => a.name).join(", ")
+              );
+              process.exit(1);
+            }
+            process.stdout.write(asset.url);
+          })
+          .catch((e) => {
+            console.error(e.message);
+            process.exit(1);
+          });
+      ' 2>/dev/null || true)"
     fi
-  else
-    fail "没有 curl 或 wget，无法下载。请手动下载后用 --ipa 指定。"
-    note "${POJAV_IPA_URL}"
-    exit 1
+
+    if [[ -n "${ASSET_URL}" ]]; then
+      ok "资产端点：${ASSET_URL}"
+      DOWNLOAD_HEADERS=(-H "Accept: application/octet-stream")
+      if [[ -n "${GITHUB_TOKEN_VALUE}" ]]; then
+        DOWNLOAD_HEADERS+=(-H "Authorization: Bearer ${GITHUB_TOKEN_VALUE}")
+      fi
+
+      if ! curl --fail --location --progress-bar \
+                --retry 5 --retry-delay 2 --retry-all-errors \
+                "${DOWNLOAD_HEADERS[@]}" \
+                ${RESUME_FLAG} --output "${CANDIDATE}" "${ASSET_URL}"; then
+        fail "两条下载路径都失败了。"
+        note "手动下载 ${POJAV_IPA_NAME} 后用 --ipa 指定："
+        note "  ./Scripts/bootstrap-runtime.sh --ipa /path/to/${POJAV_IPA_NAME}"
+        exit 1
+      fi
+    else
+      fail "下载失败，且无法通过 API 解析资产。"
+      note "请检查文件名是否拼错（注意是 pojavlaunch${BOLD}er${RESET}）："
+      note "  ${BROWSER_URL}"
+      note "也可以手动下载后用 --ipa 指定。"
+      exit 1
+    fi
   fi
 
   IPA_PATH="${CANDIDATE}"
