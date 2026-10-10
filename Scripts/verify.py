@@ -1320,6 +1320,30 @@ def check_private_frameworks(report: Report) -> None:
         "探针只影响提示文案，不该让 App 起不来",
     )
 
+    # The bundled JDK is runtime-only: no `include/` directory, hence no `jni.h`.
+    # The four JNI names used by the JLI_Launch signature are declared locally, and
+    # their values matter — `JNI_TRUE` must be 1, because `ergo_class` is a `jint`
+    # and the JVM compares against 1. Getting that wrong is not a compile error, it
+    # silently changes JVM ergonomics, which is far worse.
+    report.check(
+        "自行声明了 jni.h 里的 4 个标识符（bundle 只含 JDK 运行时，没有 jni.h）",
+        "typedef unsigned char jboolean" in text and "typedef int32_t jint" in text,
+        "JLI_Launch 的签名需要它们",
+    )
+    report.check(
+        "JNI_TRUE 定义为 1（不是 -1，jboolean 会提升为 jint）",
+        re.search(r"JNI_TRUE\s*=\s*1\b", text) is not None,
+        "写错不会编译失败，只会静默改变 JVM 人体工学设置",
+    )
+    report.check(
+        "JNI_FALSE 定义为 0",
+        re.search(r"JNI_FALSE\s*=\s*0\b", text) is not None,
+    )
+    report.check(
+        "int32_t 所需的 stdint.h 已包含",
+        "#include <stdint.h>" in text,
+    )
+
     # A public-SDK-only sweep over every Objective-C file.
     private_headers = [
         "Security/SecTask.h",

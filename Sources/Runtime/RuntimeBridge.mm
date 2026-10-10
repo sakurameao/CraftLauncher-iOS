@@ -21,6 +21,7 @@
 #include <dlfcn.h>
 #include <signal.h>
 #include <spawn.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -58,6 +59,28 @@ CFTypeRef SecTaskCopyValueForEntitlement(SecTaskRef task,
     __attribute__((weak_import));
 
 }
+
+// The four JNI names the signatures below need.
+//
+// Normally these come from `<jni.h>`, which ships with a JDK. This project bundles
+// the JDK's *runtime* only — the extracted `java_runtimes/java-8-openjdk` has no
+// `include/` directory — so the header is not available and they are declared here.
+//
+// Getting these wrong would not fail to compile; it would corrupt the JLI_Launch
+// call at runtime, so they are worth stating exactly as JNI defines them:
+//
+//   jboolean  unsigned char   (JNI's boolean type is a byte, not C++ `bool`)
+//   jint      int32_t
+//   JNI_TRUE  1               — not -1. `jboolean` widens to `jint` for
+//                               `ergo_class`, and the JVM compares against 1.
+//   JNI_FALSE 0
+typedef unsigned char jboolean;
+typedef int32_t jint;
+
+enum {
+    JNI_FALSE = 0,
+    JNI_TRUE = 1,
+};
 
 // The header types are stable across JDK 8 through JDK 25 — verified against both
 // `jdk8u/jdk/src/share/bin/java.h` and `jdk17u/src/java.base/share/native/libjli/java.h`,
