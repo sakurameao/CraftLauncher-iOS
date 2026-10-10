@@ -416,6 +416,29 @@ class ProjectConsistencyTests(unittest.TestCase):
         for sub in ("libs", "libs_caciocavallo", "libs_caciocavallo17"):
             self.assertIn(sub, text, f"缺少 {sub}/ 会导致某一代 Java 的 AWT 不可用")
 
+    def test_curl_resume_is_conditional(self) -> None:
+        """`curl -C -` must only be used when a partial file exists.
+
+        With no local file, curl sends `Range: bytes=1-` and GitHub's release CDN
+        answers 404 rather than 200 or 416. That aborted a real CI run with exit
+        code 56 — the resume flag, added to cope with a throttled home network, broke
+        the build on a well-connected runner that had nothing to resume.
+        """
+        text = (SCRIPT_DIR / "bootstrap-runtime.sh").read_text(encoding="utf-8")
+
+        # The bare form must not appear: it would break any clean checkout.
+        for line in text.split("\n"):
+            stripped = line.strip()
+            if stripped.startswith("curl ") or stripped.startswith("wget "):
+                self.assertNotIn(
+                    "-C -", stripped,
+                    "curl 调用行里不能直接写死 -C -，必须走 ${RESUME_FLAG}",
+                )
+
+        # And the guard must exist, keyed on the file being non-empty.
+        self.assertIn("RESUME_FLAG", text)
+        self.assertIn('-s "${CANDIDATE}"', text, "判断部分文件是否存在的条件不见了")
+
     def test_scripts_are_lf_only(self) -> None:
         # A CRLF shebang fails on Linux/macOS with "/bin/bash^M: bad interpreter".
         # GitHub Actions runs there, so this is a build failure, not cosmetics.

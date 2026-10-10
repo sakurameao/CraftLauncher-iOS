@@ -115,12 +115,32 @@ else
   note "国内直连 GitHub 很慢；如果卡住，用 --ipa 指定手动下好的文件。"
 
   if command -v curl >/dev/null 2>&1; then
-    # `-C -` resumes a partial file, which matters on a throttled connection.
+    # Resume matters on a throttled home network: GitHub is slow there and resets
+    # connections often, and re-downloading 103 MB from scratch each time is
+    # painful.
+    #
+    # `-C -` is only valid when the target file already EXISTS. With no local file
+    # curl sends `Range: bytes=1-`, and GitHub's release CDN answers **404** rather
+    # than 200 or 416 — which aborted a CI run with exit code 56. A GitHub-hosted
+    # runner has a fast link and no partial file, so resume is both unnecessary and
+    # harmful there.
+    RESUME_FLAG=""
+    if [[ -s "${CANDIDATE}" ]]; then
+      RESUME_FLAG="-C -"
+      note "发现已有的部分文件，将尝试续传"
+    fi
+
     curl --fail --location --progress-bar \
          --retry 5 --retry-delay 2 --retry-all-errors \
-         -C - --output "${CANDIDATE}" "${POJAV_IPA_URL}"
+         ${RESUME_FLAG} --output "${CANDIDATE}" "${POJAV_IPA_URL}" \
+      || { fail "下载失败。本机网络受限时可先用 --ipa 指定手动下好的文件。"; exit 1; }
   elif command -v wget >/dev/null 2>&1; then
-    wget --continue --tries=5 --output-document="${CANDIDATE}" "${POJAV_IPA_URL}"
+    # Same reasoning: `--continue` is only meaningful for an existing file.
+    if [[ -s "${CANDIDATE}" ]]; then
+      wget --continue --tries=5 --output-document="${CANDIDATE}" "${POJAV_IPA_URL}"
+    else
+      wget --tries=5 --output-document="${CANDIDATE}" "${POJAV_IPA_URL}"
+    fi
   else
     fail "没有 curl 或 wget，无法下载。请手动下载后用 --ipa 指定。"
     note "${POJAV_IPA_URL}"
