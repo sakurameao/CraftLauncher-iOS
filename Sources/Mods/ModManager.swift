@@ -227,7 +227,7 @@ final class ModManager: ObservableObject {
         let total = max(manifest.files.count, 1)
 
         try await HTTPClient.shared.forEachConcurrent(manifest.files, maxConcurrent: 4) { file in
-            let destination = Self.join(instance: instance, relativePath: file.relativePath)
+            let destination = await Self.join(instance: instance, relativePath: file.relativePath)
             guard let remote = URL(string: file.url) else { return }
 
             // `download` verifies the pack's own hash when it supplies one, which is

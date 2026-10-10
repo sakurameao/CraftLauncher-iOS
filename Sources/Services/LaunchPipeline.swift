@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import UIKit
 
 /// Orchestrates a complete launch, from "user pressed the button" to "the game
 /// process exited".
@@ -258,7 +259,7 @@ final class LaunchPipeline: ObservableObject {
 
         // The renderer string the bridge exports is the same one the JVM flags use,
         // because both the patched LWJGL and the GL translation layer read it.
-        let rendererForEnv = config.renderer == .auto
+        let rendererForEnv: RendererBackend = config.renderer == RendererBackend.auto
             ? RendererBackend.angleMetal
             : config.renderer
 

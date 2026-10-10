@@ -982,8 +982,13 @@ def check_required_imports(report: Report) -> None:
     report.start("必需的 import")
 
     requirements = [
+        # `UIScreen` and `UIDevice` were missing from this list, and that gap let a
+        # real error through: LaunchPipeline.swift used `UIScreen.main` while
+        # importing only Foundation and Combine, which is a compile error that only
+        # surfaced several minutes into a CI build.
         (r"\bUIImpactFeedbackGenerator\b|\bUIPasteboard\b|\bUIApplication\b"
-         r"|\bUIViewControllerRepresentable\b|\bUIColor\b", "UIKit"),
+         r"|\bUIViewControllerRepresentable\b|\bUIColor\b"
+         r"|\bUIScreen\b|\bUIDevice\b|\bUIImage\b|\bUIView\b|\bUIWindow\b", "UIKit"),
         (r"\bSFSafariViewController\b", "SafariServices"),
         (r"\bInsecure\.(MD5|SHA1)\b", "CryptoKit"),
         (r"\bUTType\b", "UniformTypeIdentifiers"),
@@ -1396,6 +1401,112 @@ def strip_objc_comments(text: str) -> str:
         out.append(text[i])
         i += 1
     return "".join(out)
+
+
+def check_swift_availability(report: Report) -> None:
+    """API that requires a newer iOS than the deployment target.
+
+    There is no Swift compiler on the development machine, so these would otherwise
+    only be caught by CI — several minutes in, one at a time. They are also easy to
+    write by accident, because the modern spelling is what autocomplete offers:
+
+        .onChange(of: x) { old, new in }     // iOS 17
+        .onChange(of: x) { new in }          // iOS 14, what iOS 16 needs
+
+    The deployment target is read from project.yml so the two cannot drift apart.
+    """
+    report.start("iOS 版本可用性")
+
+    project_yml = (PROJECT_ROOT / "project.yml").read_text(encoding="utf-8")
+    match = re.search(r"IPHONEOS_DEPLOYMENT_TARGET:\s*\"?([\d.]+)\"?", project_yml)
+    if not match:
+        match = re.search(r"iOS:\s*\"([\d.]+)\"", project_yml)
+    if not match:
+        report.check("能读出 iOS 部署目标", False)
+        return
+
+    target = match.group(1)
+    major = int(target.split(".")[0])
+    report.check(f"部署目标为 iOS {target}", True)
+
+    # (regex, minimum iOS major, explanation)
+    checks: list[tuple[str, int, str]] = [
+        (
+            r"\.onChange\(of:[^)]*\)\s*\{\s*[^,{}]+,\s*[^,{}]+\s+in",
+            17,
+            "双参数 onChange 闭包是 iOS 17 API；改用单参数 { newValue in }",
+        ),
+        (r"\bContentUnavailableView\b", 17, "ContentUnavailableView 需要 iOS 17"),
+        (r"\.scrollBounceBehavior\(", 16, "scrollBounceBehavior 需要 iOS 16.4"),
+        (r"\bObservation\b|\b@Observable\b", 17, "@Observable 需要 iOS 17"),
+        (r"\.symbolEffect\(", 17, "symbolEffect 需要 iOS 17"),
+        (r"\bScrollView\s*\([^)]*\)\s*\{\s*[^}]*\.scrollTargetBehavior", 17,
+         "scrollTargetBehavior 需要 iOS 17"),
+    ]
+
+    offenders: list[str] = []
+    for path in sorted((PROJECT_ROOT / "Sources").rglob("*.swift")):
+        text = path.read_text(encoding="utf-8")
+        for pattern, minimum, explanation in checks:
+            if minimum <= major:
+                continue
+            for found in re.finditer(pattern, text):
+                line = text.count("\n", 0, found.start()) + 1
+                offenders.append(f"{path.name}:{line}  {explanation}")
+
+    report.check(
+        f"没有高于 iOS {target} 的 API",
+        not offenders,
+        "\n".join(offenders[:12]),
+    )
+
+
+def check_renderer_backends(report: Report) -> None:
+    """The renderer raw values are dylib file names, and must be real and distinct.
+
+    Two failures of this kind shipped at once: `moltenVK` was given the same raw
+    value as `angleMetal` ("libOSMesa.dylib"), which is a compile error *and* meant
+    the MoltenVK option would have loaded the wrong library. Both are checkable
+    without a compiler.
+    """
+    report.start("渲染后端映射")
+
+    models = PROJECT_ROOT / "Sources" / "Models" / "LaunchModels.swift"
+    if not models.is_file():
+        report.check("找到 LaunchModels.swift", False)
+        return
+
+    text = models.read_text(encoding="utf-8")
+    block = re.search(r"enum RendererBackend[^{]*\{(.*?)\n\}", text, re.DOTALL)
+    if not block:
+        report.check("找到 RendererBackend 定义", False)
+        return
+
+    cases = re.findall(r'case\s+(\w+)\s*=\s*"([^"]+)"', block.group(1))
+    report.check(f"解析出 {len(cases)} 个渲染后端", len(cases) >= 3)
+
+    values = [value for _, value in cases]
+    duplicates = {v for v in values if values.count(v) > 1}
+    report.check(
+        "每个后端的原始值互不相同",
+        not duplicates,
+        f"重复的原始值: {sorted(duplicates)} —— 枚举原始值重复是编译错误",
+    )
+
+    # "auto" is not a file; the rest must exist in the bundled Frameworks directory.
+    frameworks = PROJECT_ROOT / "Runtime" / "Frameworks"
+    if frameworks.is_dir():
+        available = {p.name for p in frameworks.iterdir()}
+        for case, value in cases:
+            if value == "auto":
+                continue
+            report.check(
+                f"{case} → {value} 在 Frameworks 中存在",
+                value in available,
+                "该 dylib 没有被 bootstrap 脚本提取出来",
+            )
+    else:
+        report.skip("渲染后端对应的 dylib 是否已提取", "Runtime/Frameworks 尚未生成")
 
 
 def check_swift_structure(report: Report) -> None:
@@ -2179,6 +2290,8 @@ def main() -> int:
     check_required_imports(report)
     check_cross_file_call_sites(report)
     check_objc_class_declarations(report)
+    check_swift_availability(report)
+    check_renderer_backends(report)
     check_workflows(report)
     check_swift_structure(report)
     check_no_obvious_api_mistakes(report)

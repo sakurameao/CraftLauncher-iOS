@@ -22,7 +22,7 @@ final class ZipExtractor {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
         self.handle = handle
         self.fileSize = (try? handle.seekToEnd()) ?? 0
-        guard fileSize > 22 else { handle.close(); return nil }
+        guard fileSize > 22 else { try? handle.close(); return nil }
     }
 
     deinit { try? handle.close() }

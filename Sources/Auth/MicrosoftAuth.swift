@@ -131,7 +131,10 @@ struct MicrosoftAuth {
         progress(.minecraftProfile)
         let identity = try await fetchMinecraftProfile(accessToken: minecraft.accessToken)
 
-        let accountId = identity.xuid ?? minecraftXSTS.userHash
+        // The profile endpoint returns only `id` and `name`, so the stable id is
+        // the Xbox user hash from the XSTS response — the same value the profile
+        // step documents as the source of `auth_xuid`.
+        let accountId = minecraftXSTS.userHash
 
         // Persist secrets first. If the keychain write fails the account would be
         // unusable, so report that rather than silently creating a broken entry.

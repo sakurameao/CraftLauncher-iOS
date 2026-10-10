@@ -172,7 +172,7 @@ struct ConsoleView: View {
                     .padding(.vertical, 8)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .onChange(of: filtered.count) { _, _ in
+                .onChange(of: filtered.count) { _ in
                     guard console.autoScroll else { return }
                     withAnimation(.linear(duration: 0.15)) {
                         proxy.scrollTo("bottom", anchor: .bottom)

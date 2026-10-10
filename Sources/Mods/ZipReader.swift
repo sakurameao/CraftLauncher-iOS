@@ -34,10 +34,10 @@ final class ZipReader {
 
         let size = (try? handle.seekToEnd()) ?? 0
         self.fileSize = size
-        guard size > 22 else { handle.close(); return nil }
+        guard size > 22 else { try? handle.close(); return nil }
 
         guard readCentralDirectory() else {
-            handle.close()
+            try? handle.close()
             return nil
         }
     }

@@ -3,15 +3,26 @@ import Foundation
 /// Graphics backend passed to the runtime as `POJAV_RENDERER` plus the
 /// matching `-Dorg.lwjgl.opengl.libname`.
 ///
-/// These names are the runtime's own identifiers — they select which libGL
-/// implementation the Java side loads, so they cannot be renamed freely.
+/// The raw value is a **dylib file name in the app bundle**, because that flag
+/// makes LWJGL `dlopen` it directly. So every value here must match a file the
+/// bootstrap script actually extracts — which is checkable, and is checked by
+/// `Scripts/verify.py` under 渲染后端映射.
+///
+/// Note that `libOSMesa.8.dylib` is not a typo for `libOSMesa.dylib`: the bundled
+/// file genuinely carries the `.8` soversion, and there is no unversioned copy.
+/// ANGLE is reached through it because PojavLauncher ships an OSMesa-shaped shim in
+/// front of MetalANGLE rather than exposing MetalANGLE under its own name.
 enum RendererBackend: String, CaseIterable, Identifiable, Codable {
     /// Metal via ANGLE. The only correct choice for Minecraft 1.20.2+.
-    case angleMetal = "libOSMesa.dylib"
+    case angleMetal = "libOSMesa.8.dylib"
     /// GL4ES over the system GL stack. Best compatibility for 1.12–1.20.1.
     case gl4es = "libgl4es_114.dylib"
     /// Vulkan through MoltenVK. Experimental; needed by some shader packs.
-    case moltenVK = "libOSMesa.dylib"
+    ///
+    /// This previously carried the same raw value as `angleMetal`, which is a
+    /// compile error ("raw value for enum case is not unique") *and* would have
+    /// loaded the wrong library.
+    case moltenVK = "libMoltenVK.dylib"
     /// Let the runtime pick.
     case auto = "auto"
 

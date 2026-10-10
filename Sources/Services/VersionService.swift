@@ -31,7 +31,7 @@ actor VersionService {
             return try await existing.value
         }
 
-        let task = Task<VersionManifest, Error> { [manifestURL] in
+        let task = Task<VersionManifest, Error> { [manifestURL = VersionService.manifestURL] in
             try await HTTPClient.shared.getJSON(VersionManifest.self, from: manifestURL)
         }
         inFlightManifest = task

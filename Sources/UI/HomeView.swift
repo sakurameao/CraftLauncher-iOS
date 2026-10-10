@@ -57,6 +57,30 @@ struct HomeView: View {
 
     // MARK: - Header
 
+    /// Brand mark plus the active instance name.
+    ///
+    /// This property was referenced by `body` but never defined — a casualty of an
+    /// earlier rewrite — which surfaced as `cannot find 'header' in scope`. The
+    /// `// MARK: - Header` above `accountChip` is what remained of it.
+    private var header: some View {
+        HStack(spacing: 12) {
+            LauncherMark(size: 40)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("CraftLauncher")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(Theme.Palette.textPrimary)
+                Text(appState.activeInstance.name)
+                    .font(.caption)
+                    .foregroundStyle(Theme.Palette.textSecondary)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     private var accountChip: some View {
         HStack(spacing: 6) {
             if let account = accounts.selected {

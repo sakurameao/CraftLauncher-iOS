@@ -206,27 +206,29 @@ final class HTTPClient {
     ) async throws {
         guard !items.isEmpty else { return }
 
-        var index = 0
         let limit = Swift.max(1, Swift.min(maxConcurrent, items.count))
 
         try await withThrowingTaskGroup(of: Void.self) { group in
-            @Sendable func nextIndex() -> Int? {
-                // Safe: the task group body runs on a single executor and this
-                // closure is only invoked from within it.
-                if index >= items.count { return nil }
-                defer { index += 1 }
-                return index
-            }
+            // The cursor lives inside the task-group body rather than beside it:
+            // captured from the enclosing scope it would be a mutable variable
+            // reachable from concurrently-executing code, which strict concurrency
+            // rejects. The body itself is still a single serial context — the
+            // group only runs the child tasks — so no lock is involved, and the
+            // concurrency model is unchanged: at most `limit` tasks are in flight
+            // and indices are still handed out deterministically in order.
+            var index = 0
 
             for _ in 0..<limit {
-                guard let i = nextIndex() else { break }
-                let item = items[i]
+                guard index < items.count else { break }
+                let item = items[index]
+                index += 1
                 group.addTask { try await work(item) }
             }
 
             while let _ = try await group.next() {
-                guard let i = nextIndex() else { continue }
-                let item = items[i]
+                guard index < items.count else { continue }
+                let item = items[index]
+                index += 1
                 group.addTask { try await work(item) }
             }
         }

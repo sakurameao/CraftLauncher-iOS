@@ -29,9 +29,14 @@ struct DownloadPlan: Sendable {
     }
 
     var totalBytes: Int64 {
-        Int64((libraries + assets).reduce(0) { $0 + ($1.size ?? 0) }
-            + (clientJar?.size ?? 0)
-            + (log4jConfig?.size ?? 0))
+        // Split into explicitly-typed steps: the single expression this replaces
+        // mixed `Int?` arithmetic with the `Int64` conversion and was too
+        // expensive for the type checker to solve.
+        let items: [DownloadItem] = libraries + assets
+        let itemBytes: Int = items.reduce(0) { partial, item in partial + (item.size ?? 0) }
+        let clientBytes: Int = clientJar?.size ?? 0
+        let log4jBytes: Int = log4jConfig?.size ?? 0
+        return Int64(itemBytes + clientBytes + log4jBytes)
     }
 }
 

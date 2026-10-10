@@ -160,9 +160,22 @@ struct MinecraftVersion: Codable, Equatable {
 /// element shaped unexpectedly is skipped rather than throwing.
 struct Arguments: Codable, Equatable {
     /// Either a plain string or a conditional group.
-    enum Element: Equatable {
+    ///
+    /// The encoder is hand-written so an element round-trips into the shape Mojang
+    /// uses: a bare argument writes as a JSON string, not as an object.
+    enum Element: Equatable, Encodable {
         case literal(String)
         case conditional(ConditionalArgument)
+
+        func encode(to encoder: Encoder) throws {
+            switch self {
+            case let .literal(text):
+                var single = encoder.singleValueContainer()
+                try single.encode(text)
+            case let .conditional(argument):
+                try argument.encode(to: encoder)
+            }
+        }
     }
 
     struct ConditionalArgument: Codable, Equatable {

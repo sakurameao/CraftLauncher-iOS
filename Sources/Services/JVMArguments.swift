@@ -98,8 +98,10 @@ enum JVMArguments {
         }
 
         // ── Graphics backend ────────────────────────────────────────────────────
+        // Must be a dylib that exists in the bundle: this flag makes LWJGL dlopen it.
+        // The `.8` soversion is real — there is no unversioned `libOSMesa.dylib`.
         let rendererName = config.renderer == .auto
-            ? "libOSMesa.dylib"
+            ? RendererBackend.angleMetal.rawValue
             : config.renderer.rawValue
         argv.append("-Dorg.lwjgl.opengl.libname=\(rendererName)")
 
