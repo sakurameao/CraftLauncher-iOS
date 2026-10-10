@@ -41,9 +41,25 @@ targets:
     platform: iOS
     sources:
       - path: Sources
+
+      # Resource files, *excluding Info.plist*.
+      #
+      # Info.plist is consumed through `INFOPLIST_FILE` below, which makes the build
+      # run it through the plist processor. Bundling it as a resource as well makes
+      # the build emit two commands producing the same output:
+      #
+      #     error: Multiple commands produce '.../CraftLauncher.app/Info.plist'
+      #       note: has copy command from 'Resources/Info.plist'
+      #       note: has process command with output '.../Info.plist'
+      #
+      # `.entitlements` is excluded for the same reason — it is read at signing time
+      # via the `entitlements:` key further down, not copied into the bundle.
       - path: Resources
         buildPhase: resources
         optional: true
+        excludes:
+          - "Info.plist"
+          - "*.entitlements"
 
       # The Java runtimes and graphics libraries, added as *folder references*.
       #

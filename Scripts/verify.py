@@ -1170,6 +1170,31 @@ def check_workflows(report: Report) -> None:
             "否则格式不匹配会以 'Unable to read project' 的形式晚几分钟才暴露",
         )
 
+        # Info.plist must not be bundled as a resource *and* consumed via
+        # INFOPLIST_FILE. Doing both makes the build emit two commands with the same
+        # output:
+        #
+        #     error: Multiple commands produce '.../CraftLauncher.app/Info.plist'
+        #
+        # An earlier version listed `Resources` wholesale, which hit exactly this.
+        resources_entry = re.search(
+            r"- path: Resources\n((?:\s+.*\n)+)", project_yml
+        )
+        if resources_entry:
+            block = resources_entry.group(1)
+            report.check(
+                "Resources 资源条目排除了 Info.plist（否则与 INFOPLIST_FILE 冲突）",
+                "Info.plist" in block,
+                "会报 'Multiple commands produce .../Info.plist'",
+            )
+            report.check(
+                "Resources 资源条目排除了 entitlements（签名时读取，不进包）",
+                "entitlements" in block,
+                "授权文件应由 entitlements: 键处理，不应拷进 bundle",
+            )
+        else:
+            report.check("能解析出 project.yml 里 Resources 的 sources 条目", False)
+
         # A single .ipa is ~280-300 MB. GitHub's default artifact retention is 90
         # days and artifacts count against the account's Actions storage — 500 MB on
         # a free private repo. Leaving the default would exhaust the quota after two
