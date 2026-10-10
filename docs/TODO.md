@@ -230,12 +230,29 @@
 ## 校验器怎么用
 
 ```bash
-python3 Scripts/verify.py          # 全部检查，需要网络
-python3 Scripts/verify.py --offline # 跳过联网检查
-python3 Scripts/verify.py -v        # 列出每一项
+python3 Scripts/verify.py           # 222 项静态断言，需要网络
+python3 Scripts/verify.py --offline  # 跳过联网检查
+python3 Scripts/verify.py -v         # 列出每一项
+
+python3 Scripts/test_verify.py      # 49 个单元测试，测校验器自身
 ```
 
-208 项断言，分这些类别：
+两个都接进了 CI，在编译前跑 —— 几秒钟就能挡掉一类要十几分钟才发现的问题。
+
+### 为什么校验器自己也需要测试
+
+**因为它在写的过程中产出了四次错误结果**，每一次都是它「通过」了一件实际错的事：
+
+| 错误 | 后果 |
+|---|---|
+| 断言写的是「运行时桶必须提供 Java 21+」 | 那是 Java 21 支持被有意移除**之前**的设计，它对着过时假设通过了 |
+| 调用点正则匹配到了 `func name(` 声明本身 | 报出几十条幻影不匹配 |
+| 同一个检查没考虑默认参数值 | 合法的 `manifest()` 调用被当成错误 |
+| 一条断言结尾是 `or True` | 永远不可能失败 |
+
+这四条现在都是 `test_verify.py` 里的测试用例。
+
+### 断言类别
 
 | 类别 | 抓什么 |
 |---|---|
@@ -252,8 +269,8 @@ python3 Scripts/verify.py -v        # 列出每一项
 | entitlements | 不含 Apple 保留权限（否则证书签名失败） |
 | 必需的 import | UIKit / SafariServices / CryptoKit 等 |
 | 跨文件调用签名 | 首个参数标签必须匹配某个声明的重载 |
-| CI 工作流 | 不引用已删除的设计、bundle 校验是硬失败 |
-| Swift 结构 | 括号配对、关键文件齐备 |
+| CI 工作流 | 不引用已删除的设计、bundle 校验是硬失败、保留期合理 |
+| 脚本换行符 | `.sh` 必须纯 LF，否则 CI 上无法执行 |
 
 **它的定位要说清楚：这是启发式检查，不是编译器。** 它证明不了一定能编译，
 但能抓住跨文件不一致、重命名遗漏、以及「三方自洽但其实全都错」这类问题 ——

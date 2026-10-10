@@ -129,23 +129,32 @@ class Report:
         self.skipped += 1
         print(f"  {YELLOW(GLYPH_SKIP)} {name} {DIM('(跳过: ' + why + ')')}")
 
-    def summary(self) -> int:
-        print()
-        print(RULE)
-        total = self.passed + self.failed
-        if self.failed == 0:
-            print(f"{GREEN('全部通过')}  {self.passed}/{total} 项检查", end="")
-        else:
-            print(f"{RED('有失败项')}  {self.passed}/{total} 项通过", end="")
-        if self.skipped:
-            print(f"，{self.skipped} 项跳过", end="")
-        print()
-        if self.failures:
+    def summary(self, quiet: bool = False) -> int:
+        """Prints the tally and returns the exit code.
+
+        `quiet` exists for the unit tests: they exercise the failure path on purpose
+        (asserting that a failed check yields exit code 1), and printing a red
+        "有失败项" banner in the middle of a passing test run is actively misleading
+        to anyone reading the output.
+        """
+        if not quiet:
             print()
-            print("失败的检查：")
-            for section, name in self.failures:
-                print(f"  {RED(GLYPH_FAIL)} [{section}] {name}")
-        print(RULE)
+            print(RULE)
+            total = self.passed + self.failed
+            if self.failed == 0:
+                print(f"{GREEN('全部通过')}  {self.passed}/{total} 项检查", end="")
+            else:
+                print(f"{RED('有失败项')}  {self.passed}/{total} 项通过", end="")
+            if self.skipped:
+                print(f"，{self.skipped} 项跳过", end="")
+            print()
+            if self.failures:
+                print()
+                print("失败的检查：")
+                for section, name in self.failures:
+                    print(f"  {RED(GLYPH_FAIL)} [{section}] {name}")
+            print(RULE)
+
         return 1 if self.failed else 0
 
 
@@ -228,6 +237,57 @@ def substitute(text: str, values: dict) -> str | None:
     for key, value in values.items():
         out = out.replace("${" + key + "}", str(value))
     return None if "${" in out else out
+
+
+# ── JDK release file ──────────────────────────────────────────────────────────
+
+class JavaReleaseFile:
+    """Parses the `JAVA_VERSION` line of a JDK `release` file.
+
+    Mirrors `Sources/Models/JavaRuntime.swift`. The mapping is not obvious:
+
+    * `1.8.0` / `1.8.0_402` — the major is the **second** component (8)
+    * `17.0.8`              — the major is the **first** component (17)
+    * `21`                  — a bare major
+
+    Reading `1.8.0` as major 1 would make every legacy version unsatisfiable.
+    """
+
+    __slots__ = ("version", "major_version")
+
+    def __init__(self, version: str, major_version: int) -> None:
+        self.version = version
+        self.major_version = major_version
+
+    @classmethod
+    def parse(cls, contents: str) -> "JavaReleaseFile | None":
+        fields: dict[str, str] = {}
+        for line in contents.split("\n"):
+            parts = line.split("=", 1)
+            if len(parts) != 2:
+                continue
+            fields[parts[0].strip()] = parts[1].strip().strip('"')
+
+        raw = fields.get("JAVA_VERSION") or fields.get("JAVA_RUNTIME_VERSION")
+        if not raw:
+            return None
+        return cls(version=raw, major_version=cls._infer_major(raw))
+
+    @staticmethod
+    def _infer_major(version: str) -> int:
+        cleaned = version.strip().strip('"')
+        # `1.8.0_402` — the underscore part is a build number, not a version field.
+        parts = [chunk.split("_")[0] for chunk in cleaned.split(".")]
+        try:
+            first = int(parts[0])
+        except (ValueError, IndexError):
+            return 8
+        if first == 1 and len(parts) >= 2:
+            try:
+                return int(parts[1])
+            except ValueError:
+                return 8
+        return first
 
 
 # ── Environment under test ────────────────────────────────────────────────────
@@ -1647,7 +1707,9 @@ def check_project_layout(report: Report) -> None:
     report.start("工程文件")
 
     for relative in ["project.yml", "README.md", "LICENSE", ".gitignore",
+                     ".gitattributes",
                      "Scripts/bootstrap-runtime.sh", "Scripts/generate-project.sh",
+                     "Scripts/verify.py", "Scripts/test_verify.py",
                      "Resources/CraftLauncher.entitlements"]:
         report.check(f"{relative} 存在", (PROJECT_ROOT / relative).is_file())
 
@@ -1656,6 +1718,36 @@ def check_project_layout(report: Report) -> None:
         text = script.read_text(encoding="utf-8")
         report.check(f"{script.name} 有 shebang", text.startswith("#!/usr/bin/env bash"))
         report.check(f"{script.name} 启用了严格模式", "set -euo pipefail" in text)
+
+        # A CRLF shebang fails on Linux/macOS with
+        #     /bin/bash^M: bad interpreter: No such file or directory
+        # and GitHub Actions runs there, so this is a build failure on every push.
+        report.check(
+            f"{script.name} 是纯 LF（CRLF 会让 CI 无法执行）",
+            b"\r\n" not in script.read_bytes(),
+            "Windows 检出会把换行符改成 CRLF，靠 .gitattributes 的 eol=lf 挡住",
+        )
+
+    # The verifier is itself code, and it produced four false results while being
+    # written. Its logic is covered by Scripts/test_verify.py; this only confirms the
+    # suite exists and is wired up.
+    test_file = PROJECT_ROOT / "Scripts" / "test_verify.py"
+    if test_file.is_file():
+        test_text = test_file.read_text(encoding="utf-8")
+        report.check(
+            "校验器自带单元测试",
+            "unittest" in test_text,
+            "未被测试的检查器只是第二个未经验证的说法来源",
+        )
+        for covered in ("rules_allow", "resolve_arguments", "substitute",
+                        "resolve_minimum_tag", "java_reference_uuid"):
+            report.check(
+                f"单元测试覆盖 {covered}",
+                covered in test_text,
+                "这条逻辑错了会让校验器验证一个错误的实现",
+            )
+    else:
+        report.check("Scripts/test_verify.py 存在", False)
 
     # Documentation
     for doc in ["docs/ARCHITECTURE.md", "docs/JIT.md", "docs/SIGNING.md",

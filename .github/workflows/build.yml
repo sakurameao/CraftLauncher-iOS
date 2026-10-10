@@ -85,6 +85,9 @@ jobs:
         if: ${{ github.event.inputs.skip_verify != 'true' }}
         run: |
           python3 Scripts/verify.py
+          # verify.py is itself code and produced four false results while it was
+          # being written, so its own logic has a suite too.
+          python3 Scripts/test_verify.py
 
       - name: Install XcodeGen
         run: |
